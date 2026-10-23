@@ -44,15 +44,14 @@ Built by JoeNav27.
 | Path | What it is |
 |---|---|
 | `android-app/` | Full Android source (plain Java, zero dependencies) |
-| `slx-companion-v0.33.apk` | Latest build, ready to sideload |
-| `icon-preview.png` | Launcher icon preview |
+| Releases tab | The installable APK (v0.33) is attached to the v0.33 release as a download |
 | `docs/protocol-map-v1..v5.md` | The reverse-engineered BLE protocol, in the order it was figured out (v4 is the master; v5 covers the pin-label investigation) |
 | `docs/ble-recon-guide.md` | How the protocol was captured and decoded |
 | `docs/course-data-sources.md` | Course data source evaluation |
 
 ## Build / install
 
-Sideload the APK, or build from source: `android-app/` is a plain
+Sideload the APK from the Releases tab, or build from source: `android-app/` is a plain
 Android project (Gradle), and `android-app/build-apk.sh` documents
 the manual aapt2/javac/d8 pipeline used to produce the shipped
 APKs. The app holds no accounts and makes no network calls except
