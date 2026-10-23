@@ -24,12 +24,14 @@ import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.speech.tts.TextToSpeech;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -69,6 +71,12 @@ public class GpsActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private TextView courseNameText, holeText, distText, distUnitText, holeInfoText, pickerStatus;
+    private TextView hazardText;
+    private Button markBtn;
+    private boolean hasMark;
+    private double markLat, markLon;
+    private boolean hasMeasure;
+    private double measureLat, measureLon;
     private LinearLayout pickerBox, resultsBox, savedBox;
     private EditText searchInput;
     private Button connectBtn;
@@ -77,7 +85,7 @@ public class GpsActivity extends Activity {
     private volatile boolean geomSettled;
     private static final int PIN_FRONT = 0, PIN_CENTER = 1, PIN_BACK = 2;
     private int pinMode = PIN_CENTER;
-    private Button pinFrontBtn, pinCenterBtn, pinBackBtn;
+    private Button pinBtn;
 
     // BLE link (owned here since this screen became the app's home).
     private BluetoothAdapter adapter;
@@ -89,6 +97,7 @@ public class GpsActivity extends Activity {
     private boolean polling = false;
 
     private boolean pushToDevice = false;
+    private boolean roundAnnounced = false;
     // Display feed is always on while the app is open (user, 2026-10-22):
     // no on/off button; it starts as soon as a course + link exist.
 
@@ -176,7 +185,7 @@ public class GpsActivity extends Activity {
         });
         root.addView(connectBtn);
 
-        Button musicBtn = btn("Music EQ");
+        Button musicBtn = btn("Speaker Settings");
         musicBtn.setOnClickListener(v -> startActivity(new Intent(this, MusicActivity.class)));
         root.addView(musicBtn);
 
@@ -238,27 +247,68 @@ public class GpsActivity extends Activity {
         holeInfoText.setGravity(Gravity.CENTER_HORIZONTAL);
         root.addView(holeInfoText);
 
-        LinearLayout pinRow = new LinearLayout(this);
-        pinRow.setOrientation(LinearLayout.HORIZONTAL);
-        pinFrontBtn = btn("Front Pin");
-        pinCenterBtn = btn("Center Pin");
-        pinBackBtn = btn("Back Pin");
-        for (Button b : new Button[]{pinFrontBtn, pinCenterBtn, pinBackBtn}) {
+        hazardText = tv("", 15, false);
+        hazardText.setGravity(Gravity.CENTER_HORIZONTAL);
+        hazardText.setVisibility(View.GONE);
+        root.addView(hazardText);
+
+        // One pin button that filters through Center -> Back ->
+        // Front on each tap, mirroring the stock app (user,
+        // 2026-10-23; replaced the v0.31 three-button row in v0.39,
+        // order corrected in v0.42).
+        // The label always shows the current selection.
+        pinBtn = btn("Center Pin");
+        pinBtn.setOnClickListener(v -> cyclePinMode());
+        root.addView(pinBtn);
+        stylePinButtons();
+
+        // Mark: tap where you stand (the tee, say), walk to the
+        // ball, and the button reads the live distance from the
+        // mark — how far the shot actually went. Tap again to clear.
+        markBtn = btn("Measure Shot");
+        markBtn.setOnClickListener(v -> toggleMark());
+        root.addView(markBtn);
+
+        // In-app music controls (user, 2026-10-23): the X3's own
+        // media buttons are inert in GPS mode (device firmware),
+        // so these drive the phone's music directly — a media key
+        // for play/pause (the system routes it to YouTube Music's
+        // session) and stream volume for whatever is playing.
+        LinearLayout musicRow = new LinearLayout(this);
+        musicRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button volDownBtn = btn("Volume -");
+        Button playPauseBtn = btn("Play/Pause");
+        Button volUpBtn = btn("Volume +");
+        for (Button b : new Button[]{volDownBtn, playPauseBtn, volUpBtn}) {
             b.setLayoutParams(new LinearLayout.LayoutParams(
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-            pinRow.addView(b);
+            musicRow.addView(b);
         }
-        pinFrontBtn.setOnClickListener(v -> setPinMode(PIN_FRONT));
-        pinCenterBtn.setOnClickListener(v -> setPinMode(PIN_CENTER));
-        pinBackBtn.setOnClickListener(v -> setPinMode(PIN_BACK));
-        root.addView(pinRow);
-        stylePinButtons();
+        volDownBtn.setOnClickListener(v -> adjustVolume(false));
+        volUpBtn.setOnClickListener(v -> adjustVolume(true));
+        playPauseBtn.setOnClickListener(v -> playPause());
+        root.addView(musicRow);
 
         holeView = new HoleView(this);
         int previewH = Math.round(540 * getResources().getDisplayMetrics().density);
         holeView.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, previewH));
         holeView.setVisibility(View.GONE);
+        // Tap-to-measure: a tap on the picture drops a marker and
+        // reads the yardage from you to that spot (a layup point, a
+        // dogleg corner); tapping the marker clears it. Taps only —
+        // drags still belong to the page scroll.
+        holeView.setOnTouchListener((v, ev) -> {
+            if (ev.getAction() == android.view.MotionEvent.ACTION_DOWN) {
+                v.getParent().requestDisallowInterceptTouchEvent(true);
+                return true;
+            }
+            if (ev.getAction() == android.view.MotionEvent.ACTION_UP) {
+                handleMeasureTap(ev.getX(), ev.getY());
+                return true;
+            }
+            return false;
+        });
         root.addView(holeView);
 
         ScrollView scroll = new ScrollView(this);
@@ -322,6 +372,9 @@ public class GpsActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        // Round mode (keep-alive service running): leave GPS updates
+        // registered so yardages keep flowing with the screen off.
+        if (RoundService.isRunning()) return;
         if (lm != null) { try { lm.removeUpdates(locListener); } catch (Exception ignored) {} }
     }
 
@@ -365,7 +418,9 @@ public class GpsActivity extends Activity {
             holeText.setText("Hole —");
             distText.setText("—");
             holeInfoText.setText("");
+            if (hazardText != null) hazardText.setVisibility(View.GONE);
             holeView.setVisibility(View.GONE);
+            pushWidget(null);
             return;
         }
         holeText.setText("Hole " + h.number);
@@ -383,6 +438,163 @@ public class GpsActivity extends Activity {
             distText.setText(fmt(d));
         }
         updateHolePreview(h);
+        updateHazards(h);
+        refreshMark();
+        refreshMeasure();
+        pushWidget(h);
+    }
+
+    /** Nearest mapped water / bunker on this hole, from the cached
+     *  OSM shapes — one quiet line, hidden when nothing is mapped. */
+    private void updateHazards(CourseApi.Hole h) {
+        if (hazardText == null) return;
+        HoleGeom g = geom;
+        HoleGeom.Shape s = (g == null) ? null : g.byHole.get(h.number);
+        if (s == null || lastLoc == null || (s.waters.isEmpty() && s.bunkers.isEmpty())) {
+            hazardText.setVisibility(View.GONE);
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (!s.waters.isEmpty()) {
+            double best = Double.MAX_VALUE;
+            for (List<double[]> poly : s.waters) {
+                best = Math.min(best, HoleGeom.distToPolygonMeters(
+                        lastLoc.getLatitude(), lastLoc.getLongitude(), poly));
+            }
+            sb.append("Water ").append(fmt(best));
+        }
+        if (!s.bunkers.isEmpty()) {
+            double best = Double.MAX_VALUE;
+            for (List<double[]> poly : s.bunkers) {
+                best = Math.min(best, HoleGeom.distToPolygonMeters(
+                        lastLoc.getLatitude(), lastLoc.getLongitude(), poly));
+            }
+            if (sb.length() > 0) sb.append("   ·   ");
+            sb.append("Bunker ").append(fmt(best));
+        }
+        hazardText.setText(sb.toString());
+        hazardText.setVisibility(View.VISIBLE);
+    }
+
+    // ------------------------------------------------------------- mark
+
+    private void toggleMark() {
+        if (hasMark) {
+            hasMark = false;
+            markBtn.setText("Measure Shot");
+            return;
+        }
+        if (lastLoc == null) {
+            toast("No GPS fix yet");
+            return;
+        }
+        markLat = lastLoc.getLatitude();
+        markLon = lastLoc.getLongitude();
+        hasMark = true;
+        refreshMark();
+    }
+
+    private void refreshMark() {
+        if (markBtn == null) return;
+        if (!hasMark) {
+            markBtn.setText("Measure Shot");
+            return;
+        }
+        if (lastLoc == null) return;
+        float[] out = new float[1];
+        Location.distanceBetween(markLat, markLon,
+                lastLoc.getLatitude(), lastLoc.getLongitude(), out);
+        markBtn.setText("Measure Shot · " + fmt(out[0]) + " yd");
+    }
+
+    // ---------------------------------------------------- tap-to-measure
+
+    private void handleMeasureTap(float x, float y) {
+        if (holeView.getVisibility() != View.VISIBLE) return;
+        if (holeView.hitMeasure(x, y)) {
+            hasMeasure = false;
+            holeView.clearMeasure();
+            return;
+        }
+        double[] ll = holeView.unproject(x, y);
+        if (ll == null) return;
+        measureLat = ll[0];
+        measureLon = ll[1];
+        hasMeasure = true;
+        refreshMeasure();
+    }
+
+    private void refreshMeasure() {
+        if (!hasMeasure || holeView == null) return;
+        String label;
+        if (lastLoc == null) {
+            label = "···";
+        } else {
+            float[] out = new float[1];
+            Location.distanceBetween(lastLoc.getLatitude(), lastLoc.getLongitude(),
+                    measureLat, measureLon, out);
+            label = fmt(out[0]) + " yd";
+        }
+        holeView.setMeasure(measureLat, measureLon, label,
+                lastLoc == null ? 0 : lastLoc.getLatitude(),
+                lastLoc == null ? 0 : lastLoc.getLongitude(),
+                lastLoc != null);
+    }
+
+    // ------------------------------------------------------------ widget
+
+    private String lastWidgetState = "";
+
+    /** Publishes the displayed yardage to the home-screen widget
+     *  (through SharedPreferences; the widget does no work itself). */
+    private void pushWidget(CourseApi.Hole h) {
+        SharedPreferences.Editor ed = getSharedPreferences("widget", MODE_PRIVATE).edit();
+        String state;
+        if (h == null || course == null) {
+            state = "off";
+            ed.putBoolean("active", false);
+        } else {
+            String yards = lastLoc == null ? "···" : fmt(distToTargetMeters(lastLoc, h));
+            String pin = pinMode == PIN_FRONT ? "front" : pinMode == PIN_BACK ? "back" : "center";
+            state = course.name + "|" + h.number + "|" + yards + "|" + pin;
+            ed.putBoolean("active", true);
+            ed.putString("course", course.name);
+            ed.putInt("hole", h.number);
+            ed.putString("yards", yards);
+            ed.putString("pin", pin);
+        }
+        ed.apply();
+        if (!state.equals(lastWidgetState)) {
+            lastWidgetState = state;
+            YardageWidget.push(this);
+        }
+    }
+
+    /** Media play/pause toggle via the system media-key route. */
+    private void playPause() {
+        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return;
+        long t = android.os.SystemClock.uptimeMillis();
+        am.dispatchMediaKeyEvent(new KeyEvent(t, t, KeyEvent.ACTION_DOWN,
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, 0));
+        am.dispatchMediaKeyEvent(new KeyEvent(t, t + 10, KeyEvent.ACTION_UP,
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, 0));
+    }
+
+    private void adjustVolume(boolean up) {
+        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return;
+        am.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+                up ? AudioManager.ADJUST_RAISE : AudioManager.ADJUST_LOWER,
+                AudioManager.FLAG_SHOW_UI);
+    }
+
+    /** Cycle Center -> Back -> Front -> Center. (The stock order,
+     *  corrected 2026-10-23 from the user's exact snoop narration;
+     *  v0.39 had Front and Back swapped.) */
+    private void cyclePinMode() {
+        setPinMode(pinMode == PIN_CENTER ? PIN_BACK
+                : pinMode == PIN_BACK ? PIN_FRONT : PIN_CENTER);
     }
 
     private void setPinMode(int mode) {
@@ -394,13 +606,11 @@ public class GpsActivity extends Activity {
     }
 
     private void stylePinButtons() {
-        Button[] bs = {pinFrontBtn, pinCenterBtn, pinBackBtn};
-        for (int i = 0; i < bs.length; i++) {
-            if (bs[i] == null) continue;
-            boolean sel = i == pinMode;
-            bs[i].setBackgroundColor(sel ? 0xFF1B5E20 : 0xFFE0E0E0);
-            bs[i].setTextColor(sel ? 0xFFFFFFFF : 0xFF212121);
-        }
+        if (pinBtn == null) return;
+        pinBtn.setText(pinMode == PIN_FRONT ? "Front Pin"
+                : pinMode == PIN_BACK ? "Back Pin" : "Center Pin");
+        pinBtn.setBackgroundColor(0xFF1B5E20);
+        pinBtn.setTextColor(0xFFFFFFFF);
     }
 
     /**
@@ -484,6 +694,10 @@ public class GpsActivity extends Activity {
         if (clamped == holeIdx && !manual) return;
         holeIdx = clamped;
         autoAdvancedForHole = false;
+        if (hasMeasure) {
+            hasMeasure = false;
+            holeView.clearMeasure();
+        }
         updateDisplay();
         // Stock behaviour on a hole change: restart the record set with
         // a zero reset for rec 1, then rebuild the window one by one.
@@ -538,18 +752,32 @@ public class GpsActivity extends Activity {
     private void startPush() {
         if (course == null) {
             pushToDevice = false;
+        roundAnnounced = false;
             return;
         }
         lastSentHole = -1;
         lastSentYd = -1;
         lastValueMs = 0;
         resetMs = 0;
-        if (SlxLink.isLive()) {
-            // Stock round-start sequence, byte-for-byte from the capture.
-            SlxLink.send(Slx.cmdRoundStartA());
-            SlxLink.send(Slx.cmdRoundStartA());
+        if (SlxLink.isLive() && !roundAnnounced) {
+            // Round start = the lone 0x17, ONCE per round. Captures
+            // 2–4 (including the readout-confirmed session) contain
+            // no 0x5a at all and exactly one 0x17; this app used to
+            // fire a 0x5a/0x17 burst at EVERY hole change — a
+            // trailing 0x5a after the 0x17 may knock the device back
+            // out of round mode, and re-announcing per hole never
+            // happens in stock sessions. v0.49 matches stock: one
+            // 0x17 when the round begins, records only after that.
             SlxLink.send(Slx.cmdRoundActive());
-            SlxLink.send(Slx.cmdRoundStartA());
+            // Then the stock app's Start sequence (A/B snoop,
+            // 2026-10-23): the idx3=01 round-active plus a settings
+            // re-upload — the pair that makes the device report
+            // "Start" and arms its power-button readout. Our feed
+            // starts the round automatically, so it goes out with
+            // the announcement, once per round.
+            SlxLink.send(Slx.cmdRoundStarted());
+            SlxLink.send(Slx.cmdSettingsUpload());
+            roundAnnounced = true;
         }
         ui.removeCallbacks(pushTick);
         ui.postDelayed(pushTick, 350);
@@ -578,21 +806,21 @@ public class GpsActivity extends Activity {
             resetMs = now;
             return;
         }
-        // v0.9 field result: flag 0x02 on live values changed nothing —
-        // the sweep-from-0 is the device's own rendering of any fresh
-        // record (it's a swing speedometer at heart; the stock app
-        // feeds it the same records and gets the same sweep). The
-        // lever we actually have is cadence: only update in >= 5 yd
-        // steps so the number finishes its sweep and then sits —
-        // standing at the ball (when it's read) it never re-sends.
+        // Cadence: only update in >= 5 yd steps so the number
+        // finishes its count-up sweep and then sits.
         boolean changed = lastSentYd < 0 || Math.abs(yd - lastSentYd) >= 5.0;
         boolean due = now - lastValueMs >= 2000;
         boolean heartbeat = now - lastValueMs >= 30000;
         if (!((changed && due) || heartbeat)) return;
         if (now - resetMs < 500) return; // keep the reset -> value gap
-        // Live values at flag 0x02 (matches the stock stream's settled
-        // values; 0x01 vs 0x02 made no difference to the display sweep).
-        SlxLink.send(Slx.distanceRecord(h.number, yd, 0x02));
+        // Live values carry the SELECTED PIN's flag: the record flag
+        // byte is the pin selector the device displays (0x01 = FP,
+        // 0x02 = CP, 0x03 = BP — proven when v0.46's flip from 0x02
+        // to 0x01 moved the device's label from CP to FP; this app
+        // had sent 0x02 for every value since v0.9, which is why
+        // the label never followed the pin button). pinMode is
+        // FRONT=0 / CENTER=1 / BACK=2, so the flag is pinMode + 1.
+        SlxLink.send(Slx.distanceRecord(h.number, yd, pinMode + 1));
         lastSentYd = yd;
         lastValueMs = now;
     }
@@ -749,6 +977,7 @@ public class GpsActivity extends Activity {
 
     private void setCourse(CourseApi.Course c) {
         course = c;
+        roundAnnounced = false;
         holeIdx = 0;
         autoAdvancedForHole = false;
         courseNameText.setText(c.name);
@@ -846,6 +1075,26 @@ public class GpsActivity extends Activity {
         if (course != null && !pushToDevice && SlxLink.isLive()) {
             pushToDevice = true;
             startPush();
+            startRoundService();
+        }
+    }
+
+    // Keep-alive round mode (user, 2026-10-23): while the feed is
+    // live, a foreground service keeps GPS + BLE running with the
+    // phone locked. Starts/stops with the feed itself.
+    private void startRoundService() {
+        if (RoundService.isRunning()) return;
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                        != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 44);
+        }
+        startForegroundService(new Intent(this, RoundService.class));
+    }
+
+    private void stopRoundService() {
+        if (RoundService.isRunning()) {
+            stopService(new Intent(this, RoundService.class));
         }
     }
 
@@ -853,9 +1102,12 @@ public class GpsActivity extends Activity {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
     }
 
-    // The synthetic TEST course (walk-test era) is retired — user,
-    // 2026-10-22: it kept coming up. Its id stays defined only so the
-    // saved list and startup can filter out copies saved earlier.
+    // The synthetic course id (walk-test course 2026-10-22, then
+    // the Fake Course during the readout hunt). The Fake Course
+    // feature was removed at the user's word in v0.55; the id and
+    // its guards stay so a leftover fake-course file on the phone
+    // remains hidden from the saved list and out of startup
+    // auto-load.
     private static final long TEST_ID = 999000341L;
 
     // ------------------------------------------------------------ BLE link
@@ -924,9 +1176,8 @@ public class GpsActivity extends Activity {
             if (name == null && result.getScanRecord() != null) {
                 name = result.getScanRecord().getDeviceName();
             }
-            boolean macMatch = Slx.KNOWN_MAC.equalsIgnoreCase(dev.getAddress());
             boolean nameMatch = name != null && name.startsWith(Slx.NAME_PREFIX);
-            if (!macMatch && !nameMatch) return;
+            if (!nameMatch) return;
             stopScan();
             connectBtn.setText("Connecting…");
             try {
@@ -959,7 +1210,9 @@ public class GpsActivity extends Activity {
     private void disconnect() {
         stopPolling();
         stopScan();
+        stopRoundService();
         pushToDevice = false;
+        roundAnnounced = false;
         SlxLink.clear();
         if (gatt != null) {
             try { gatt.disconnect(); } catch (Exception ignored) {}
@@ -982,6 +1235,7 @@ public class GpsActivity extends Activity {
                 bleConnected = false;
                 stopPolling();
                 pushToDevice = false;
+        roundAnnounced = false;
                 SlxLink.clear();
                 rxChar = null;
                 ui.post(() -> connectBtn.setText("Connect to SLX"));
@@ -1019,6 +1273,8 @@ public class GpsActivity extends Activity {
     private void onLinkReady() {
         SlxLink.attach(gatt, rxChar);
         sendBle(Slx.getConfig());
+        sendBle(Slx.cmdSettingsUpload());
+        sendBle(Slx.cmdConnect1c());
         startPolling();
         ensurePush();
     }
@@ -1046,6 +1302,15 @@ public class GpsActivity extends Activity {
     };
 
     private void sendBle(byte[] data) {
+        // All characteristic writes go through SlxLink's spaced queue:
+        // back-to-back NO_RESPONSE writes get silently dropped by the
+        // GATT stack, which ate most of our connect/round-start bursts
+        // until v0.47 (see SlxLink). The direct write below remains
+        // only as a pre-attach fallback.
+        if (SlxLink.isLive()) {
+            SlxLink.send(data);
+            return;
+        }
         BluetoothGatt g = gatt;
         BluetoothGattCharacteristic rx = rxChar;
         if (g == null || rx == null || !bleConnected) return;

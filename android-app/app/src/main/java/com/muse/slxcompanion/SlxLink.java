@@ -3,6 +3,10 @@ package com.muse.slxcompanion;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+
+import java.util.ArrayDeque;
 
 /**
  * The live BLE link to the SLX, shared between screens.
@@ -31,14 +35,64 @@ public final class SlxLink {
         gatt = null;
         rxChar = null;
         connected = false;
+        synchronized (QUEUE) {
+            QUEUE.clear();
+            draining = false;
+        }
+        WRITER.removeCallbacksAndMessages(null);
     }
 
     public static boolean isLive() {
         return connected && gatt != null && rxChar != null;
     }
 
-    /** Writes one framed command. Returns false if the link is down. */
+    // ------------------------------------------------------------ writes
+    //
+    // Every frame goes through ONE queue that writes a frame every
+    // 75 ms. Android's GATT stack silently drops WRITE_TYPE_NO_RESPONSE
+    // writes issued while another is outstanding, and this app used to
+    // fire bursts back-to-back (the 4-frame round-start sequence, the
+    // connect-time config fetch + settings upload). The 2026-10-23
+    // our-app snoop showed the cost: of the round-start burst only one
+    // 0x5a arrived and the 0x17 never did; a v0.44 session's settings
+    // upload never arrived either — two "failed" experiments that
+    // mostly tested frames the device never received. The stock app
+    // spaces its own bursts ~200 ms apart; 75 ms is safely inside the
+    // stack's comfort and still far faster than the frame cadence.
+
+    private static final Handler WRITER = new Handler(Looper.getMainLooper());
+    private static final ArrayDeque<byte[]> QUEUE = new ArrayDeque<>();
+    private static boolean draining = false;
+
+    private static final Runnable DRAIN = new Runnable() {
+        @Override public void run() {
+            byte[] data;
+            synchronized (QUEUE) {
+                data = QUEUE.poll();
+                if (data == null) {
+                    draining = false;
+                    return;
+                }
+            }
+            writeNow(data);
+            WRITER.postDelayed(this, 75);
+        }
+    };
+
+    /** Queues one framed command for spaced delivery. */
     public static boolean send(byte[] data) {
+        if (!isLive()) return false;
+        synchronized (QUEUE) {
+            QUEUE.add(data);
+            if (!draining) {
+                draining = true;
+                WRITER.post(DRAIN);
+            }
+        }
+        return true;
+    }
+
+    private static boolean writeNow(byte[] data) {
         BluetoothGatt g = gatt;
         BluetoothGattCharacteristic rx = rxChar;
         if (g == null || rx == null || !connected) return false;

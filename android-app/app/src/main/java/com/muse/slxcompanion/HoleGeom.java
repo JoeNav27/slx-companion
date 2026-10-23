@@ -246,6 +246,32 @@ public class HoleGeom {
         return new double[]{lat / pts.size(), lon / pts.size()};
     }
 
+    /**
+     * Distance in meters from a point to a lat/lon polygon: 0 when
+     * the point is inside, else the distance to the nearest edge.
+     * Used for the GPS screen's hazard distances (water / bunker).
+     */
+    public static double distToPolygonMeters(double lat, double lon, List<double[]> poly) {
+        if (poly == null || poly.size() < 3) return Double.MAX_VALUE;
+        if (pointInPolygon(lat, lon, poly)) return 0;
+        List<double[]> ring = new ArrayList<>(poly);
+        if (!samePoint(ring.get(0), ring.get(ring.size() - 1))) ring.add(ring.get(0));
+        return distToPolylineMeters(new double[]{lat, lon}, ring);
+    }
+
+    private static boolean pointInPolygon(double lat, double lon, List<double[]> poly) {
+        boolean inside = false;
+        for (int i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+            double xi = poly.get(i)[1], yi = poly.get(i)[0];
+            double xj = poly.get(j)[1], yj = poly.get(j)[0];
+            if ((yi > lat) != (yj > lat)
+                    && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
     /** Distance in meters from a point to a lat/lon polyline (local flat-earth). */
     private static double distToPolylineMeters(double[] pt, List<double[]> line) {
         double kx = 111320.0 * Math.cos(Math.toRadians(pt[0]));

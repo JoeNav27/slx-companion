@@ -29,10 +29,12 @@ echo "[1/5] aapt2 compile + link (manifest+res -> base APK)"
 "$BT/aapt2" compile --dir "$SRC/res" -o "$OUT/res.zip"
 "$BT/aapt2" link -o "$OUT/base.apk" -I "$ANDROID_JAR" \
   --manifest "$SRC/AndroidManifest.xml" \
-  --version-code 33 --version-name 0.33 "$OUT/res.zip"
+  --java "$OUT/gen" \
+  --version-code 55 --version-name 0.55 "$OUT/res.zip"
 
 echo "[2/5] javac"
 find "$SRC/java" -name '*.java' > "$OUT/sources.txt"
+find "$OUT/gen" -name '*.java' >> "$OUT/sources.txt"
 javac -encoding UTF-8 -source 17 -target 17 -cp "$ANDROID_JAR" -d "$OUT/classes" @"$OUT/sources.txt"
 
 echo "[3/5] d8 (bytecode -> dex)"

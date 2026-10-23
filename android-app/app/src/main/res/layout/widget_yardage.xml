@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#1B5E20"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/widget_course"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="SLX Companion"
+        android:textColor="#C8E6C9"
+        android:textSize="13sp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <TextView
+        android:id="@+id/widget_hole"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/widget_yards"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="—"
+        android:textColor="#FFFFFF"
+        android:textSize="46sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/widget_pin"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="no round loaded"
+        android:textColor="#C8E6C9"
+        android:textSize="13sp" />
+</LinearLayout>

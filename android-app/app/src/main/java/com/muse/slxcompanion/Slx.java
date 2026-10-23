@@ -22,8 +22,6 @@ public final class Slx {
     public static final UUID NUS_TX = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
     public static final UUID CCC = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
-    /** Optional fast-path MAC for your own unit; name-prefix match works regardless. */
-    public static final String KNOWN_MAC = "XX:XX:XX:XX:XX:XX";
     public static final String NAME_PREFIX = "SLX";
 
     // Phone -> device command types observed in the stock app's session.
@@ -62,12 +60,43 @@ public final class Slx {
     public static byte[] pollState() { return frame(CMD_POLL_STATE, null); }
 
     /**
+     * Device settings upload, type 0x5f — the stock app sends this
+     * 14-byte block at every connect (twice in captures); our app
+     * never sent it at all (added v0.44). Byte 5: DO NOT TOUCH.
+     * Capture 4's stock upload has 0x00 there; capture 3 and the
+     * A/B stock session have 0x03 — but when v0.51 uploaded 0x03,
+     * the user's device went visibly wrong (green LED blinking
+     * constantly, holes switching 1↔2 at random on pin changes).
+     * Whatever byte 5 selects, it is a device mode with teeth, not
+     * a volume knob. Reverted to 0x00 in v0.52; characterize it
+     * from captures only, never by experiment on the device.
+     */
+    public static byte[] cmdSettingsUpload() {
+        return frame(0x5f, new byte[]{0x01, 0, 0, 0, 0, 0, 0, 0x01, 0, 0, 0x01, 0, 0x04, 0});
+    }
+
+    /**
+     * Type 0x1c, payload 01 01 — the stock app sends this once at
+     * every connect, between its settings uploads. Purpose unknown;
+     * until v0.48 it was the one stock session frame this app had
+     * never sent at all, which made it the last unsent suspect in
+     * the power-button readout hunt.
+     */
+    public static byte[] cmdConnect1c() {
+        return frame(0x1c, new byte[]{0x01, 0x01});
+    }
+
+    /**
      * One live distance record, type 0x01 — the pushes the stock app
      * sends during a round (protocol-map v2/v3): payload is
      * [rec][u16 BE = yards x 10][0x02][flag]. 999.0 yd is the
      * out-of-range cap the stock app uses. rec is 1-based; in the
      * captured round, rec 1 tracked the current hole live while the
-     * following recs held the upcoming holes' distances.
+     * following recs held the upcoming holes' distances. The flag
+     * byte is the PIN SELECTOR the device displays: 0x01 = FP,
+     * 0x02 = CP, 0x03 = BP (proven on the user's device 2026-10-23:
+     * flipping our live records 0x02 → 0x01 flipped the device's
+     * label CP → FP). The hole-start zero reset uses 0x02.
      */
     public static final int CMD_DISTANCE_RECORD = 0x01;
 
@@ -76,13 +105,29 @@ public final class Slx {
     }
 
     /**
-     * The stock app's round-start sequence, captured byte-for-byte:
-     * three type 0x5a (payload 01 01) with a type 0x17 between them
-     * (payload 00 00 01 01 00 00 00 00 00 — "round active" flags).
-     * Sent once when a round starts, before the table and records.
+     * The stock app's round-start sequence: three type 0x5a (payload
+     * 01 01) with a type 0x17 between them. The 0x17 payload came
+     * from the first capture (00 00 01 01 …), but captures 2–4 —
+     * including the readout-confirmed session — all send
+     * 00 00 01 00 …: byte 3 is 0 there. v0.45 flips ours to match
+     * (the settings upload in v0.44 changed nothing, so this flags
+     * byte is the next single-variable readout-arm suspect).
      */
     public static byte[] cmdRoundStartA() { return frame(0x5a, new byte[]{0x01, 0x01}); }
-    public static byte[] cmdRoundActive() { return frame(0x17, new byte[]{0, 0, 1, 1, 0, 0, 0, 0, 0}); }
+    public static byte[] cmdRoundActive() { return frame(0x17, new byte[]{0, 0, 1, 0, 0, 0, 0, 0, 0}); }
+
+    /**
+     * The stock app's START action, decoded from the 2026-10-23 A/B
+     * snoop: when the user taps Start, the app sends the 0x17 with
+     * byte 3 SET (00 00 01 01 …) and re-uploads the settings block;
+     * the device answers with its "Start" state report — and only in
+     * a started round does the power-button readout speak (the
+     * user's single A/B press came after starting, and spoke; every
+     * session of ours, which never sent this, stayed silent). The
+     * idx3=00 variant above is the "round loaded" form sent when a
+     * course is picked.
+     */
+    public static byte[] cmdRoundStarted() { return frame(0x17, new byte[]{0, 0, 1, 1, 0, 0, 0, 0, 0}); }
 
     /**
      * Flag byte as seen in the stock capture: 0x01 on live values during

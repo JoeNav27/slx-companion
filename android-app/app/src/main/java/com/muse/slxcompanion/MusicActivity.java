@@ -1,9 +1,7 @@
 package com.muse.slxcompanion;
 
 import android.app.Activity;
-import android.content.Context;
 import android.graphics.Typeface;
-import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -22,17 +20,20 @@ import java.util.Locale;
  * The user's music always comes from the YouTube Music app, so there
  * is deliberately no player here. This screen runs the EQ that
  * EqHolder attaches to YouTube Music's announced audio session:
- * band sliders, presets, bass boost, all persisted. While attached,
+ * band sliders and presets, all persisted. While attached,
  * the EQ shapes YouTube Music's sound on its way to the SLX speaker.
+ *
+ * (Bass boost and an on-screen volume bar were removed 2026-10-23
+ * at the user's word: the boost had no audible effect on this
+ * setup, and the bar didn't track the phone/Bluetooth volume.)
  */
 public class MusicActivity extends Activity {
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
-    private TextView attachText, presetText, bassText;
+    private TextView attachText, presetText;
     private Button eqBtn;
     private LinearLayout bandsBox;
-    private SeekBar bassSeek;
     private int shownPreset = -1;
 
     private final EqHolder.Listener eqListener = () -> ui.post(this::refresh);
@@ -42,8 +43,15 @@ public class MusicActivity extends Activity {
         super.onCreate(savedInstanceState);
         EqHolder.arm(this);
         buildUi();
-        setupVolume();
         EqHolder.listener = eqListener;
+        EqHolder.ensureFx(this);
+        refresh();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        EqHolder.ensureFx(this);
         refresh();
     }
 
@@ -74,7 +82,7 @@ public class MusicActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(40, 40, 40, 40);
 
-        TextView title = tv("Music EQ", 26, true);
+        TextView title = tv("Speaker Settings", 26, true);
         title.setTextColor(0xFF1B5E20);
         root.addView(title);
 
@@ -108,47 +116,9 @@ public class MusicActivity extends Activity {
         bandsBox.setOrientation(LinearLayout.VERTICAL);
         root.addView(bandsBox);
 
-        root.addView(tv("BASS BOOST", 15, true));
-        bassText = tv("Bass boost: 0%", 14, false);
-        root.addView(bassText);
-        bassSeek = new SeekBar(this);
-        bassSeek.setMax(1000);
-        bassSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
-                if (fromUser) {
-                    EqHolder.setBassStrength(MusicActivity.this, p);
-                    bassText.setText("Bass boost: " + Math.round(p / 10.0) + "%");
-                }
-            }
-            @Override public void onStartTrackingTouch(SeekBar s) {}
-            @Override public void onStopTrackingTouch(SeekBar s) {}
-        });
-        root.addView(bassSeek);
-
-        root.addView(tv("Media volume", 14, false));
-        SeekBar vol = new SeekBar(this);
-        vol.setId(2001);
-        root.addView(vol);
-
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
         setContentView(scroll);
-    }
-
-    private void setupVolume() {
-        SeekBar vol = findViewById(2001);
-        if (vol == null) return;
-        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        if (am == null) return;
-        vol.setMax(am.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-        vol.setProgress(am.getStreamVolume(AudioManager.STREAM_MUSIC));
-        vol.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
-                if (fromUser) am.setStreamVolume(AudioManager.STREAM_MUSIC, p, 0);
-            }
-            @Override public void onStartTrackingTouch(SeekBar s) {}
-            @Override public void onStopTrackingTouch(SeekBar s) {}
-        });
     }
 
     private void stepPreset(int dir) {
@@ -165,7 +135,9 @@ public class MusicActivity extends Activity {
     private void refresh() {
         boolean attached = EqHolder.isAttached();
         attachText.setText(attached
-                ? "EQ connected to YouTube Music ✓"
+                ? (EqHolder.onMixFallback()
+                        ? "EQ connected — YouTube Music session pending"
+                        : "EQ connected to YouTube Music ✓")
                 : "Waiting for YouTube Music — press play there.");
         eqBtn.setText(EqHolder.eqEnabled(this) ? "Equalizer: ON" : "Equalizer: OFF");
 
@@ -176,10 +148,6 @@ public class MusicActivity extends Activity {
         } else {
             presetText.setText("—");
         }
-
-        int bass = EqHolder.bassStrength(this);
-        bassSeek.setProgress(bass);
-        bassText.setText("Bass boost: " + Math.round(bass / 10.0) + "%");
 
         buildBandSliders();
     }

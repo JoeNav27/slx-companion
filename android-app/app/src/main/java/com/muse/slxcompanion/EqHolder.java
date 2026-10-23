@@ -6,7 +6,6 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.media.audiofx.AudioEffect;
-import android.media.audiofx.BassBoost;
 import android.media.audiofx.Equalizer;
 import android.os.Build;
 
@@ -21,8 +20,9 @@ import android.os.Build;
  * attach effects to that session (this is how EQ apps like Wavelet
  * work). YouTube Music still announces its session on current
  * Android, so we arm a receiver for the life of this process, attach
- * an Equalizer + BassBoost when YouTube Music shows up, and re-apply
- * the saved settings every time.
+ * an Equalizer when YouTube Music shows up, and re-apply the saved
+ * settings every time. (A BassBoost rode along until 2026-10-23;
+ * it had no audible effect on the user's setup and was removed.)
  *
  * Settings persist in SharedPreferences, so the user's curve survives
  * restarts; the attach itself lasts while this app's process lives.
@@ -39,7 +39,6 @@ public final class EqHolder {
     private static final String PREFS = "musiceq";
 
     private static Equalizer eq;
-    private static BassBoost bass;
     private static int attachedSession = -1;
     private static boolean armed = false;
 
@@ -80,7 +79,6 @@ public final class EqHolder {
         releaseFx();
         try {
             eq = new Equalizer(0, sessionId);
-            bass = new BassBoost(0, sessionId);
             attachedSession = sessionId;
             applySavedFx(ctx);
             notifyListener();
@@ -89,6 +87,28 @@ public final class EqHolder {
             releaseFx();
             return false;
         }
+    }
+
+    /**
+     * Recovery for a missed announcement (field report 2026-10-23):
+     * installing an update kills this process, and if YouTube Music
+     * announced its session before the new process armed its
+     * receiver, the announcement is gone for good — the EQ screen
+     * sat empty and nothing the user reconnected could retrigger
+     * it. So when the screen opens with no EQ, attach to the
+     * output-mix session (0) as a fallback: sliders display and
+     * respond immediately, saved settings apply, and when YouTube
+     * Music later announces its real session, attach() swaps us
+     * onto it automatically.
+     */
+    public static synchronized void ensureFx(Context ctx) {
+        if (eq != null) return;
+        attach(ctx, 0);
+    }
+
+    /** True while running on the output-mix fallback, not YTM's session. */
+    public static synchronized boolean onMixFallback() {
+        return eq != null && attachedSession == 0;
     }
 
     private static synchronized void detachIf(int sessionId) {
@@ -101,7 +121,6 @@ public final class EqHolder {
 
     private static void releaseFx() {
         if (eq != null) { try { eq.release(); } catch (Exception ignored) {} eq = null; }
-        if (bass != null) { try { bass.release(); } catch (Exception ignored) {} bass = null; }
     }
 
     public static synchronized boolean isAttached() { return eq != null; }
@@ -127,13 +146,6 @@ public final class EqHolder {
                 }
             }
         } catch (Exception ignored) {}
-        if (bass != null) {
-            try {
-                int strength = p.getInt("bass", 0);
-                bass.setStrength((short) strength);
-                bass.setEnabled(on && strength > 0);
-            } catch (Exception ignored) {}
-        }
     }
 
     public static synchronized boolean fxAvailable() { return eq != null; }
@@ -199,24 +211,7 @@ public final class EqHolder {
         if (eq != null) {
             try { eq.setEnabled(on); } catch (Exception ignored) {}
         }
-        if (bass != null) {
-            try { bass.setEnabled(on && bassStrength(ctx) > 0); } catch (Exception ignored) {}
-        }
         notifyListener();
-    }
-
-    public static synchronized int bassStrength(Context ctx) {
-        return prefs(ctx).getInt("bass", 0);
-    }
-
-    public static synchronized void setBassStrength(Context ctx, int strength) {
-        prefs(ctx).edit().putInt("bass", strength).apply();
-        if (bass != null) {
-            try {
-                bass.setStrength((short) strength);
-                bass.setEnabled(eqEnabled(ctx) && strength > 0);
-            } catch (Exception ignored) {}
-        }
     }
 
     private static void notifyListener() {

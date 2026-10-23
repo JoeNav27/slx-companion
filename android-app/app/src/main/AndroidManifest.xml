@@ -32,6 +32,14 @@
     <!-- Lets the EQ attach to YouTube Music's announced audio session -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!-- Keep-alive round mode: foreground service + wakelock so GPS
+         and the BLE feed keep running with the phone locked -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:label="SLX Companion"
         android:icon="@mipmap/ic_launcher"
@@ -50,6 +58,21 @@
             android:name=".MusicActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
+        <service
+            android:name=".RoundService"
+            android:exported="false"
+            android:foregroundServiceType="location|connectedDevice" />
+        <receiver
+            android:name=".YardageWidget"
+            android:exported="false"
+            android:label="SLX yardage">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_yardage_info" />
+        </receiver>
     </application>
 
 </manifest>
