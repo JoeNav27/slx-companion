@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Foreground mark (108x108 space): a putting green with fringe,
+     flag and hole, with speaker sound waves radiating from the hole. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- fringe -->
+    <path
+        android:fillColor="#4E8A3C"
+        android:pathData="M50,53.5 a24,11 0 1,0 0.01,0 z" />
+    <!-- green -->
+    <path
+        android:fillColor="#A8D45E"
+        android:pathData="M50,55 a20.5,8.5 0 1,0 0.01,0 z" />
+    <!-- flag pole -->
+    <path
+        android:fillColor="#ECEFF1"
+        android:pathData="M49.3,36h1.5v26.5h-1.5z" />
+    <!-- flag -->
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M50.8,36 L66,41.5 L50.8,47 z" />
+    <!-- hole -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,59.6 a2.4,2.4 0 1,0 0.01,0 z" />
+    <!-- sound waves from the hole -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.2"
+        android:strokeAlpha="0.95"
+        android:strokeLineCap="round"
+        android:pathData="M58.7,55.2 A11,11 0 0 1 58.7,68.8" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.2"
+        android:strokeAlpha="0.7"
+        android:strokeLineCap="round"
+        android:pathData="M63,51.8 A16.5,16.5 0 0 1 63,72.2" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.2"
+        android:strokeAlpha="0.45"
+        android:strokeLineCap="round"
+        android:pathData="M67.3,48.4 A22,22 0 0 1 67.3,75.6" />
+</vector>
